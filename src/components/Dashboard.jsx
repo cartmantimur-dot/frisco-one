@@ -11,7 +11,7 @@ const Dashboard = ({ onLogout }) => {
   const [loading, setLoading] = useState(true);
 
   const [maxConcurrent, setMaxConcurrent] = useState(2);
-  const [viewMode, setViewMode] = useState('timeline'); // 'timeline' or 'calendar'
+  const [viewMode, setViewMode] = useState('calendar');
 
   // Modal States
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -19,29 +19,89 @@ const Dashboard = ({ onLogout }) => {
   const [modalDate, setModalDate] = useState('');
   const [vacationToEdit, setVacationToEdit] = useState(null);
 
-  // Fetch Data on Mount
+  // Stats
+  const [stats, setStats] = useState({
+    totalWorkers: 0,
+    currentlyOnVacation: 0,
+    availableWorkers: 0,
+    futureVacations: 0
+  });
+
+  // Next Vacations List
+  const [nextVacations, setNextVacations] = useState([]);
+
   useEffect(() => {
     fetchData();
   }, []);
 
-  // Realtime Subscription
   useEffect(() => {
     const channel = supabase
       .channel('realtime_updates')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'workers' }, (payload) => {
-        console.log('Worker Change:', payload);
-        fetchWorkers();
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'vacations' }, (payload) => {
-        console.log('Vacation Change:', payload);
-        fetchVacations();
-      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'workers' }, () => fetchWorkers())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'vacations' }, () => fetchVacations())
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
   }, []);
+
+  useEffect(() => {
+    calculateStats();
+  }, [vacations, workers]);
+
+  const calculateStats = () => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // 1. Total Workers
+    const totalWorkers = workers.length;
+
+    // 2. Currently on Vacation
+    const currentlyOnVacation = vacations.filter(v => {
+      const start = new Date(v.startDate);
+      const end = new Date(v.endDate);
+      start.setHours(0, 0, 0, 0);
+      end.setHours(23, 59, 59, 999);
+      return today >= start && today <= end;
+    }).length;
+
+    // 3. Available Workers
+    const availableWorkers = totalWorkers - currentlyOnVacation;
+
+    // 4. Future Vacations (starts tomorrow or later)
+    const futureVacationsCount = vacations.filter(v => {
+      const start = new Date(v.startDate);
+      start.setHours(0, 0, 0, 0);
+      return start > today;
+    }).length;
+
+    setStats({
+      totalWorkers,
+      currentlyOnVacation,
+      availableWorkers,
+      futureVacations: futureVacationsCount
+    });
+
+    // Calculate Next Vacations List
+    const upcoming = vacations
+      .filter(v => {
+        const end = new Date(v.endDate);
+        end.setHours(23, 59, 59, 999);
+        return end >= today; // Show current and future vacations
+      })
+      .sort((a, b) => new Date(a.startDate) - new Date(b.startDate))
+      .slice(0, 5)
+      .map(v => {
+        const worker = workers.find(w => w.id === v.workerId);
+        return {
+          ...v,
+          workerName: worker ? worker.name : 'Unbekannt'
+        };
+      });
+
+    setNextVacations(upcoming);
+  };
 
   const fetchData = async () => {
     setLoading(true);
@@ -51,27 +111,25 @@ const Dashboard = ({ onLogout }) => {
 
   const fetchWorkers = async () => {
     const { data, error } = await supabase.from('workers').select('*').order('name');
-    if (error) console.error('Error fetching workers:', error);
-    else setWorkers(data);
+    if (!error) setWorkers(data);
   };
 
   const fetchVacations = async () => {
     const { data, error } = await supabase.from('vacations').select('*');
-    if (error) console.error('Error fetching vacations:', error);
-    else {
-      // Convert date strings to match local format if needed, but Supabase returns YYYY-MM-DD which is fine
+    if (!error) {
       setVacations(data.map(v => ({
         ...v,
-        workerId: v.worker_id, // Map snake_case to camelCase for internal use
+        workerId: v.worker_id,
         startDate: v.start_date,
         endDate: v.end_date
       })));
     }
   };
 
+  // Handlers
   const handleDayClick = (date) => {
     setModalDate(date);
-    setVacationToEdit(null); // New vacation
+    setVacationToEdit(null);
     setIsModalOpen(true);
   };
 
@@ -79,7 +137,7 @@ const Dashboard = ({ onLogout }) => {
     const vacation = vacations.find(v => v.id === vacationId);
     if (vacation) {
       setVacationToEdit(vacation);
-      setModalDate(''); // Not needed for edit
+      setModalDate('');
       setIsModalOpen(true);
     }
   };
@@ -93,207 +151,215 @@ const Dashboard = ({ onLogout }) => {
     };
 
     if (vacationData.id) {
-      // Update
-      const { error } = await supabase
-        .from('vacations')
-        .update(payload)
-        .eq('id', vacationData.id);
-      if (error) alert('Fehler beim Speichern: ' + error.message);
+      await supabase.from('vacations').update(payload).eq('id', vacationData.id);
     } else {
-      // Create
-      const { error } = await supabase
-        .from('vacations')
-        .insert([payload]);
-      if (error) alert('Fehler beim Erstellen: ' + error.message);
+      await supabase.from('vacations').insert([payload]);
     }
-    // No need to manually setVacations, Realtime will trigger fetch
   };
 
   const handleDeleteVacation = async (vacationId) => {
-    const { error } = await supabase
-      .from('vacations')
-      .delete()
-      .eq('id', vacationId);
-    if (error) alert('Fehler beim Löschen: ' + error.message);
+    await supabase.from('vacations').delete().eq('id', vacationId);
   };
 
-  // Worker Handlers
   const handleAddWorker = async (workerData) => {
-    const { error } = await supabase
-      .from('workers')
-      .insert([{ name: workerData.name, department: workerData.department }]);
-    if (error) alert('Fehler beim Hinzufügen: ' + error.message);
+    await supabase.from('workers').insert([{ name: workerData.name, department: workerData.department }]);
   };
 
   const handleDeleteWorker = async (workerId) => {
-    const { error } = await supabase
-      .from('workers')
-      .delete()
-      .eq('id', workerId);
-    if (error) alert('Fehler beim Löschen: ' + error.message);
+    await supabase.from('workers').delete().eq('id', workerId);
   };
 
-  if (loading) return <div style={{ padding: '2rem', color: 'white' }}>Lade Daten...</div>;
+  if (loading) return <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Lade Daten...</div>;
 
   return (
-    <div className="dashboard">
-      <header className="header">
-        <h1>Frisco One <span style={{ fontWeight: '300', opacity: 0.7 }}>Vacation Planner</span></h1>
-        <div className="controls">
-          <button className="btn-icon" onClick={() => setIsWorkerModalOpen(true)} title="Mitarbeiter verwalten">
-            👥
-          </button>
-          <button className="btn-icon" onClick={onLogout} title="Abmelden">
-            🚪
-          </button>
-          <div className="divider"></div>
-          <div className="view-toggle">
-            <button
-              className={`toggle-btn ${viewMode === 'timeline' ? 'active' : ''}`}
-              onClick={() => setViewMode('timeline')}
-            >
-              Timeline
+    <div style={{ minHeight: '100vh', background: 'var(--bg-body)', paddingBottom: '2rem' }}>
+      {/* Header */}
+      <header style={{ background: 'white', borderBottom: '1px solid var(--border-color)', padding: '1rem 0' }}>
+        <div className="container" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <div style={{ width: '40px', height: '40px', background: 'var(--primary)', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold' }}>FL</div>
+            <h1 style={{ fontSize: '1.25rem', fontWeight: '700' }}>Frisco Leiharbeit</h1>
+          </div>
+          <div style={{ display: 'flex', gap: '1rem' }}>
+            <button onClick={() => setIsWorkerModalOpen(true)} className="btn btn-secondary">
+              + Mitarbeiter
             </button>
-            <button
-              className={`toggle-btn ${viewMode === 'calendar' ? 'active' : ''}`}
-              onClick={() => setViewMode('calendar')}
-            >
-              Calendar
+            <button onClick={onLogout} className="btn-icon" title="Abmelden">
+              🚪
             </button>
           </div>
-          <div className="divider"></div>
-          <label>
-            Max Concurrent:
-            <input
-              type="number"
-              value={maxConcurrent}
-              onChange={(e) => setMaxConcurrent(parseInt(e.target.value))}
-              min="1"
-            />
-          </label>
         </div>
       </header>
 
-      <main className="main-content">
-        {viewMode === 'timeline' ? (
-          <VacationTimeline
-            workers={workers}
-            vacations={vacations}
-            setVacations={setVacations}
-            maxConcurrent={maxConcurrent}
-          />
-        ) : (
-          <VacationCalendar
-            vacations={vacations}
-            workers={workers}
-            maxConcurrent={maxConcurrent}
-            onDayClick={handleDayClick}
-            onVacationClick={handleVacationClick}
-          />
-        )}
-      </main>
+      <div className="container">
+        {/* Dashboard Title & Meta */}
+        <div style={{ margin: '2rem 0', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+          <div>
+            <h2 style={{ fontSize: '2rem', fontWeight: '700', marginBottom: '0.5rem' }}>Dashboard</h2>
+            <p style={{ color: 'var(--text-secondary)' }}>Übersicht über Ihre Personaldaten</p>
+          </div>
+          <div style={{ background: 'var(--accent-green)', color: 'var(--icon-green)', padding: '0.5rem 1rem', borderRadius: '2rem', fontSize: '0.85rem', fontWeight: '500' }}>
+            Heute: {new Date().toLocaleDateString('de-DE')}
+          </div>
+        </div>
 
-      <VacationModal
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        onSave={handleSaveVacation}
-        onDelete={handleDeleteVacation}
-        workers={workers}
-        initialDate={modalDate}
-        vacationToEdit={vacationToEdit}
-        vacations={vacations}
-        maxConcurrent={maxConcurrent}
-      />
+        {/* Stats Grid */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1.5rem', marginBottom: '2rem' }}>
 
-      <WorkerModal
-        isOpen={isWorkerModalOpen}
-        onClose={() => setIsWorkerModalOpen(false)}
-        workers={workers}
-        onAddWorker={handleAddWorker}
-        onDeleteWorker={handleDeleteWorker}
-      />
+          {/* Card 1: Aktuell im Urlaub */}
+          <div className="card stat-card">
+            <div>
+              <span className="stat-label">Aktuell im Urlaub</span>
+              <span className="stat-value">{stats.currentlyOnVacation}</span>
+            </div>
+            <div className="icon-badge badge-yellow">🏖️</div>
+          </div>
 
-      <style>{`
-        .dashboard {
-          min-height: 100vh;
-          display: flex;
-          flex-direction: column;
-        }
-        .header {
-          background: var(--color-bg-secondary);
-          padding: var(--space-md) var(--space-xl);
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          border-bottom: 1px solid var(--color-bg-tertiary);
-        }
-        .header h1 {
-          font-size: 1.5rem;
-          color: var(--color-primary);
-        }
-        .controls {
-          display: flex;
-          gap: var(--space-md);
-          align-items: center;
-        }
-        .divider {
-          width: 1px;
-          height: 24px;
-          background: var(--color-bg-tertiary);
-        }
-        .view-toggle {
-          display: flex;
-          background: var(--color-bg-tertiary);
-          padding: 2px;
-          border-radius: var(--radius-md);
-        }
-        .toggle-btn {
-          background: transparent;
-          border: none;
-          color: var(--color-text-secondary);
-          padding: var(--space-xs) var(--space-md);
-          border-radius: var(--radius-sm);
-          font-size: 0.9rem;
-          font-weight: 500;
-        }
-        .toggle-btn.active {
-          background: var(--color-bg-primary);
-          color: var(--color-text-primary);
-          box-shadow: var(--shadow-sm);
-        }
-        .controls label {
-          display: flex;
-          align-items: center;
-          gap: var(--space-sm);
-          font-size: 0.9rem;
-          color: var(--color-text-secondary);
-        }
-        .controls input {
-          background: var(--color-bg-tertiary);
-          border: 1px solid var(--color-bg-tertiary);
-          color: var(--color-text-primary);
-          padding: var(--space-xs) var(--space-sm);
-          border-radius: var(--radius-sm);
-          width: 60px;
-        }
-        .btn-icon {
-          background: transparent;
-          border: none;
-          font-size: 1.2rem;
-          cursor: pointer;
-          padding: var(--space-xs);
-          border-radius: var(--radius-sm);
-          transition: background 0.2s;
-        }
-        .btn-icon:hover {
-          background: var(--color-bg-tertiary);
-        }
-        .main-content {
-          flex: 1;
-          padding: var(--space-xl);
-          overflow: hidden;
-        }
-      `}</style>
+          {/* Card 2: Verfügbare Mitarbeiter */}
+          <div className="card stat-card">
+            <div>
+              <span className="stat-label">Verfügbare Mitarbeiter</span>
+              <span className="stat-value">{stats.availableWorkers}</span>
+            </div>
+            <div className="icon-badge badge-green">✅</div>
+          </div>
+
+          {/* Card 3: Geplante Urlaube */}
+          <div className="card stat-card">
+            <div>
+              <span className="stat-label">Geplante Urlaube</span>
+              <span className="stat-value">{stats.futureVacations}</span>
+            </div>
+            <div className="icon-badge badge-blue">📅</div>
+          </div>
+
+          {/* Card 4: Mitarbeiter Gesamt */}
+          <div className="card stat-card">
+            <div>
+              <span className="stat-label">Mitarbeiter Gesamt</span>
+              <span className="stat-value">{stats.totalWorkers}</span>
+            </div>
+            <div className="icon-badge badge-purple">👥</div>
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '1.5rem' }}>
+
+          {/* Main Content Area (Calendar/Timeline) */}
+          <div className="card" style={{ minHeight: '600px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '1rem' }}>
+              <h3 style={{ fontSize: '1.25rem', fontWeight: '600' }}>
+                {viewMode === 'timeline' ? 'Urlaubsplanung' : 'Kalenderübersicht'}
+              </h3>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button
+                  className={`btn ${viewMode === 'timeline' ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setViewMode('timeline')}
+                >
+                  Zeitstrahl
+                </button>
+                <button
+                  className={`btn ${viewMode === 'calendar' ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setViewMode('calendar')}
+                >
+                  Kalender
+                </button>
+              </div>
+            </div>
+
+            <div style={{ height: '500px' }}>
+              {viewMode === 'timeline' ? (
+                <VacationTimeline
+                  workers={workers}
+                  vacations={vacations}
+                  maxConcurrent={maxConcurrent}
+                  onDayClick={handleDayClick}
+                  onVacationClick={handleVacationClick}
+                />
+              ) : (
+                <VacationCalendar
+                  vacations={vacations}
+                  workers={workers}
+                  onDayClick={handleDayClick}
+                  onVacationClick={handleVacationClick}
+                />
+              )}
+            </div>
+          </div>
+
+          {/* Next Vacations List */}
+          <div className="card" style={{ height: 'fit-content' }}>
+            <h3 style={{ fontSize: '1.1rem', fontWeight: '600', marginBottom: '1rem' }}>Nächste Urlaube</h3>
+            {nextVacations.length === 0 ? (
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Keine anstehenden Urlaube.</p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                {nextVacations.map((vacation, idx) => (
+                  <div key={idx} style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.75rem',
+                    padding: '0.75rem',
+                    borderRadius: 'var(--radius-md)',
+                    background: 'var(--bg-body)',
+                    border: '1px solid var(--border-color)'
+                  }}>
+                    <div style={{
+                      width: '36px',
+                      height: '36px',
+                      borderRadius: '50%',
+                      background: 'var(--accent-blue)',
+                      color: 'var(--icon-blue)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontWeight: 'bold',
+                      fontSize: '0.8rem'
+                    }}>
+                      {vacation.workerName.charAt(0)}
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: '600', fontSize: '0.9rem' }}>{vacation.workerName}</div>
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                        {new Date(vacation.startDate).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })} - {new Date(vacation.endDate).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <button className="btn btn-secondary" style={{ width: '100%', marginTop: '1rem' }} onClick={() => setViewMode('calendar')}>
+              Alle anzeigen
+            </button>
+          </div>
+
+        </div>
+      </div>
+
+      {/* Modals */}
+      {isModalOpen && (
+        <VacationModal
+          isOpen={isModalOpen}
+          onClose={() => setIsModalOpen(false)}
+          onSave={handleSaveVacation}
+          onDelete={handleDeleteVacation}
+          workers={workers}
+          vacations={vacations}
+          maxConcurrent={maxConcurrent}
+          initialDate={modalDate}
+          vacationToEdit={vacationToEdit}
+        />
+      )}
+
+      {isWorkerModalOpen && (
+        <WorkerModal
+          isOpen={isWorkerModalOpen}
+          onClose={() => setIsWorkerModalOpen(false)}
+          onSave={handleAddWorker}
+          onDelete={handleDeleteWorker}
+          workers={workers}
+        />
+      )}
     </div>
   );
 };

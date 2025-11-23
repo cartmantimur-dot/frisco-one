@@ -4,6 +4,7 @@ import { getHolidays } from '../utils/holidays';
 const VacationCalendar = ({ vacations, workers, maxConcurrent, onDayClick, onVacationClick }) => {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [showHolidays, setShowHolidays] = useState(true);
+  const [showSchoolVacations, setShowSchoolVacations] = useState(false);
 
   const getDaysInMonth = (year, month) => {
     return new Date(year, month + 1, 0).getDate();
@@ -19,11 +20,6 @@ const VacationCalendar = ({ vacations, workers, maxConcurrent, onDayClick, onVac
   const daysInMonth = getDaysInMonth(year, month);
   const firstDay = getFirstDayOfMonth(year, month);
 
-  const monthNames = [
-    "Januar", "Februar", "März", "April", "Mai", "Juni",
-    "Juli", "August", "September", "Oktober", "November", "Dezember"
-  ];
-
   const prevMonth = () => {
     setCurrentDate(new Date(year, month - 1, 1));
   };
@@ -32,7 +28,7 @@ const VacationCalendar = ({ vacations, workers, maxConcurrent, onDayClick, onVac
     setCurrentDate(new Date(year, month + 1, 1));
   };
 
-  // Mock School Holidays NRW (Simplified Ranges)
+  // Mock School Holidays NRW
   const schoolHolidays = [
     { start: '2023-10-02', end: '2023-10-14', name: 'Herbstferien' },
     { start: '2023-12-21', end: '2024-01-05', name: 'Weihnachtsferien' },
@@ -77,7 +73,7 @@ const VacationCalendar = ({ vacations, workers, maxConcurrent, onDayClick, onVac
 
     // Get School Holiday
     let schoolHolidayName = null;
-    if (showHolidays && !holidayName) {
+    if (showSchoolVacations && !holidayName) {
       const sh = schoolHolidays.find(h => {
         const start = new Date(h.start);
         const end = new Date(h.end);
@@ -89,295 +85,161 @@ const VacationCalendar = ({ vacations, workers, maxConcurrent, onDayClick, onVac
     return { count: activeVacations.length, workerInfos, holidayName, schoolHolidayName };
   };
 
-  const handleDayClick = (day) => {
-    if (onDayClick) {
-      const date = new Date(year, month, day, 12, 0, 0);
-      onDayClick(date.toISOString().split('T')[0]);
-    }
-  };
-
-  const handleBadgeClick = (e, vacationId) => {
-    e.stopPropagation();
-    if (onVacationClick) {
-      onVacationClick(vacationId);
-    }
-  };
-
   const renderCalendarDays = () => {
     const days = [];
 
     for (let i = 0; i < firstDay; i++) {
-      days.push(<div key={`empty-${i}`} className="calendar-day empty"></div>);
+      days.push(<div key={`empty-${i}`} style={{ background: 'transparent' }}></div>);
     }
 
     for (let day = 1; day <= daysInMonth; day++) {
       const { count, workerInfos, holidayName, schoolHolidayName } = getDayInfo(day);
       const isFull = count >= maxConcurrent;
       const ratio = count / maxConcurrent;
+      const date = new Date(year, month, day);
+      const isToday = date.toDateString() === new Date().toDateString();
+      const isWeekend = date.getDay() === 0 || date.getDay() === 6;
 
-      let statusClass = 'available';
-      if (isFull) statusClass = 'full';
-      else if (ratio >= 0.5) statusClass = 'warning';
+      let bgStyle = 'white';
+      if (isFull) bgStyle = '#fee2e2'; // Red 100
+      else if (ratio >= 0.5) bgStyle = '#ffedd5'; // Orange 100
 
-      let holidayClass = '';
-      if (holidayName) holidayClass = 'is-holiday';
-      else if (schoolHolidayName) holidayClass = 'is-school-holiday';
+      if (holidayName) bgStyle = '#fef9c3'; // Yellow 100
+      else if (schoolHolidayName) bgStyle = '#e0f2fe'; // Blue 100
 
       days.push(
         <div
           key={day}
-          className={`calendar-day ${statusClass} ${holidayClass}`}
-          onClick={() => handleDayClick(day)}
+          onClick={() => onDayClick && onDayClick(date.toISOString().split('T')[0])}
+          style={{
+            minHeight: '120px',
+            padding: '0.5rem',
+            borderRight: '1px solid var(--border-color)',
+            borderBottom: '1px solid var(--border-color)',
+            backgroundColor: bgStyle,
+            position: 'relative',
+            cursor: 'pointer',
+            transition: 'background 0.2s',
+            display: 'flex',
+            flexDirection: 'column'
+          }}
+          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f1f5f9'}
+          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = bgStyle}
         >
-          <div className="day-header">
-            <span className="day-number">{day}</span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+            <span style={{
+              fontWeight: isToday ? 'bold' : 'normal',
+              color: isToday ? 'var(--primary)' : (isWeekend ? 'var(--text-light)' : 'var(--text-main)'),
+              background: isToday ? 'var(--accent-blue)' : 'transparent',
+              padding: isToday ? '2px 6px' : '0',
+              borderRadius: '4px'
+            }}>
+              {day}
+            </span>
             {(holidayName || schoolHolidayName) && (
-              <span className="holiday-label">{holidayName || schoolHolidayName}</span>
+              <span style={{ fontSize: '0.7rem', color: 'var(--icon-yellow)', textAlign: 'right', maxWidth: '70%', lineHeight: '1.1', fontWeight: '500' }}>
+                {holidayName || schoolHolidayName}
+              </span>
             )}
           </div>
 
-          <div className="day-content">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', flex: 1 }}>
             {workerInfos.map((info, idx) => (
               <div
                 key={idx}
-                className="worker-badge"
-                onClick={(e) => handleBadgeClick(e, info.vacationId)}
-                title="Klicken zum Bearbeiten"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onVacationClick && onVacationClick(info.vacationId);
+                }}
+                style={{
+                  fontSize: '0.75rem',
+                  background: 'var(--accent-blue)',
+                  borderLeft: '2px solid var(--primary)',
+                  color: 'var(--icon-blue)',
+                  padding: '2px 4px',
+                  borderRadius: '0 4px 4px 0',
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  fontWeight: '500'
+                }}
+                title={info.name}
               >
                 {info.name}
               </div>
             ))}
           </div>
 
-          <div className="day-footer">
-            <span className="count">{count}/{maxConcurrent}</span>
-          </div>
+          {count > 0 && (
+            <div style={{ marginTop: 'auto', textAlign: 'right', fontSize: '0.7rem', color: isFull ? 'red' : 'var(--text-light)' }}>
+              {count}/{maxConcurrent}
+            </div>
+          )}
         </div>
       );
     }
-
     return days;
   };
 
   return (
-    <div className="calendar-container">
-      <div className="calendar-header">
-        <div className="nav-controls">
-          <button onClick={prevMonth} className="nav-btn">&lt;</button>
-          <h2>{monthNames[month]} {year}</h2>
-          <button onClick={nextMonth} className="nav-btn">&gt;</button>
+    <div className="vacation-calendar" style={{ height: '100%', display: 'flex', flexDirection: 'column', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+      {/* Calendar Header */}
+      <div className="calendar-header" style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        padding: '1rem',
+        borderBottom: '1px solid var(--border-color)',
+        background: '#f8fafc'
+      }}>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <button onClick={prevMonth} className="btn btn-secondary" style={{ padding: '0.25rem 0.5rem' }}>◀</button>
+          <button onClick={nextMonth} className="btn btn-secondary" style={{ padding: '0.25rem 0.5rem' }}>▶</button>
         </div>
+        <h2 style={{ fontSize: '1.1rem', fontWeight: '600', color: 'var(--text-main)' }}>
+          {currentDate.toLocaleString('de-DE', { month: 'long', year: 'numeric' })}
+        </h2>
 
-        <div className="options">
-          <label className="toggle-switch">
-            <input
-              type="checkbox"
-              checked={showHolidays}
-              onChange={e => setShowHolidays(e.target.checked)}
-            />
-            <span className="slider"></span>
-            <span className="label-text">Feiertage & Ferien (NRW)</span>
+        <div style={{ display: 'flex', gap: '1rem' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+            <input type="checkbox" checked={showHolidays} onChange={(e) => setShowHolidays(e.target.checked)} />
+            Feiertage
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+            <input type="checkbox" checked={showSchoolVacations} onChange={(e) => setShowSchoolVacations(e.target.checked)} />
+            Ferien
           </label>
         </div>
       </div>
 
-      <div className="weekdays-grid">
-        <div>Mo</div><div>Di</div><div>Mi</div><div>Do</div><div>Fr</div><div>Sa</div><div>So</div>
+      {/* Days Header */}
+      <div className="days-header" style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(7, 1fr)',
+        textAlign: 'center',
+        padding: '0.75rem 0',
+        background: '#f1f5f9',
+        borderBottom: '1px solid var(--border-color)',
+        fontWeight: '600',
+        fontSize: '0.85rem',
+        color: 'var(--text-secondary)'
+      }}>
+        {['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'].map(day => (
+          <div key={day}>{day}</div>
+        ))}
       </div>
 
-      <div className="days-grid">
+      {/* Calendar Grid */}
+      <div className="calendar-grid" style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(7, 1fr)',
+        flex: 1,
+        overflowY: 'auto',
+        background: 'white'
+      }}>
         {renderCalendarDays()}
       </div>
-
-      <style>{`
-        .calendar-container {
-          background: var(--color-bg-secondary);
-          border-radius: var(--radius-lg);
-          padding: var(--space-lg);
-          height: 100%;
-          display: flex;
-          flex-direction: column;
-        }
-        .calendar-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: var(--space-lg);
-        }
-        .nav-controls {
-          display: flex;
-          align-items: center;
-          gap: var(--space-md);
-        }
-        .calendar-header h2 {
-          color: var(--color-text-primary);
-          font-size: 1.5rem;
-          min-width: 200px;
-          text-align: center;
-        }
-        .nav-btn {
-          background: var(--color-bg-tertiary);
-          color: var(--color-text-primary);
-          border: none;
-          width: 36px;
-          height: 36px;
-          border-radius: 50%;
-          cursor: pointer;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-        }
-        .nav-btn:hover {
-          background: var(--color-primary);
-          color: var(--color-bg-primary);
-        }
-        
-        .options {
-          display: flex;
-          align-items: center;
-        }
-        .toggle-switch {
-          display: flex;
-          align-items: center;
-          gap: var(--space-sm);
-          cursor: pointer;
-          color: var(--color-text-secondary);
-          font-size: 0.9rem;
-        }
-        .toggle-switch input {
-          display: none;
-        }
-        .slider {
-          width: 36px;
-          height: 20px;
-          background-color: var(--color-bg-tertiary);
-          border-radius: 20px;
-          position: relative;
-          transition: 0.3s;
-        }
-        .slider:before {
-          content: "";
-          position: absolute;
-          width: 16px;
-          height: 16px;
-          border-radius: 50%;
-          background: white;
-          top: 2px;
-          left: 2px;
-          transition: 0.3s;
-        }
-        input:checked + .slider {
-          background-color: var(--color-primary);
-        }
-        input:checked + .slider:before {
-          transform: translateX(16px);
-        }
-        
-        .weekdays-grid {
-          display: grid;
-          grid-template-columns: repeat(7, 1fr);
-          gap: var(--space-sm);
-          margin-bottom: var(--space-sm);
-          text-align: center;
-          color: var(--color-text-secondary);
-          font-weight: 600;
-        }
-
-        .days-grid {
-          display: grid;
-          grid-template-columns: repeat(7, 1fr);
-          gap: var(--space-sm);
-          flex: 1;
-          overflow-y: auto;
-        }
-
-        .calendar-day {
-          background: var(--color-bg-primary);
-          border-radius: var(--radius-md);
-          padding: var(--space-sm);
-          min-height: 120px;
-          display: flex;
-          flex-direction: column;
-          border: 1px solid var(--color-bg-tertiary);
-          position: relative;
-          cursor: pointer;
-          transition: all 0.2s;
-        }
-        
-        .calendar-day:hover {
-          border-color: var(--color-primary);
-          transform: translateY(-2px);
-          box-shadow: var(--shadow-md);
-        }
-
-        .calendar-day.is-holiday {
-          background: rgba(234, 179, 8, 0.05); /* Yellow tint */
-          border-color: rgba(234, 179, 8, 0.3);
-        }
-        .calendar-day.is-school-holiday {
-           background: rgba(56, 189, 248, 0.05); /* Blue tint */
-        }
-
-        .day-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: flex-start;
-          margin-bottom: var(--space-xs);
-        }
-        
-        .day-number {
-          font-weight: 600;
-          color: var(--color-text-primary);
-        }
-        
-        .holiday-label {
-          font-size: 0.7rem;
-          color: var(--color-warning);
-          text-align: right;
-          max-width: 70%;
-          line-height: 1.1;
-        }
-        .is-school-holiday .holiday-label {
-          color: var(--color-text-accent);
-        }
-
-        .day-content {
-          flex: 1;
-          display: flex;
-          flex-direction: column;
-          gap: 2px;
-          overflow-y: auto;
-        }
-
-        .worker-badge {
-          background: var(--color-bg-tertiary);
-          color: var(--color-text-primary);
-          font-size: 0.75rem;
-          padding: 2px 6px;
-          border-radius: 4px;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          cursor: pointer;
-          transition: background 0.2s;
-        }
-        .worker-badge:hover {
-          background: var(--color-primary);
-          color: white;
-        }
-
-        .day-footer {
-          margin-top: var(--space-xs);
-          text-align: right;
-          font-size: 0.8rem;
-          color: var(--color-text-secondary);
-        }
-        
-        .calendar-day.full .day-footer {
-          color: var(--color-danger);
-          font-weight: bold;
-        }
-      `}</style>
     </div>
   );
 };
